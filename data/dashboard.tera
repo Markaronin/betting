@@ -1,0 +1,246 @@
+{% extends "base" %}
+<!-- prettier-ignore -->
+{% block content %}
+<nav class="navbar navbar-expand-lg">
+    <div class="navbar-nav">
+        <a class="nav-item nav-link active" href="#">Home</a>
+        <a class="nav-item nav-link" href="/leaderboard">Leaderboard</a>
+        <a class="nav-item nav-link" href="/changelog">Changelog</a>
+        <a class="nav-item nav-link" href="/about">About</a>
+    </div>
+</nav>
+
+<h2 class="mb-5">
+    Hello, {{ user.name }}. You currently have ${{user.money |
+    round(precision=2)}}
+</h2>
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-xl">
+            {% for bet in bets %}
+            <div>
+                <hr />
+
+                <h3>
+                    {{ bet.name | escape }}{% if bet.closed %} - (Closed){%
+                    endif %}
+                </h3>
+
+                <p>
+                    Created by {{ bet.creator_name }} {% if
+                    bet.created_seconds_since_epoch %} at
+                    {{ bet.created_seconds_since_epoch | date(format="%H:%M, %m/%d/%Y", timezone="America/Denver") }}
+                    {% endif %}
+                </p>
+                <p>
+                    Currently has a liquidity pool of
+                    {{ bet.yes_pool | round(precision=2) }} yes shares and
+                    {{ bet.no_pool | round(precision=2) }} no shares.
+                </p>
+
+                <!-- prettier-ignore -->
+                {% if bet.user_yes and bet.user_yes.amount > 0 %}
+    You have {{ bet.user_yes.amount }} shares in yes<br />
+                <!-- prettier-ignore -->
+                {% endif %}
+                <!-- prettier-ignore -->
+                {% if bet.user_no and bet.user_no.amount > 0 %}
+    You have {{ bet.user_no.amount }} shares in no<br />
+                {% endif %}
+                <div
+                    class="progress"
+                    style="width: 30em; height: 2em; margin-top: 1em"
+                >
+                    <div
+                        class="progress-bar bg-success"
+                        style="width: {{ bet.probability_of_yes * 100 }}%"
+                    >
+                        {{ bet.probability_of_yes | round(precision=2) }}
+                    </div>
+                    <div
+                        class="progress-bar bg-danger"
+                        style="width: {{ (1 - bet.probability_of_yes) * 100 }}%"
+                    >
+                        {{ (1 - bet.probability_of_yes) | round(precision=2) }}
+                    </div>
+                </div>
+
+                {% if not bet.closed %}
+                <form action="/place" method="post" style="margin-top: 1em">
+                    <input name="bet_id" value="{{ bet.bet_id }}" hidden />
+                    <div class="input-group">
+                        <input
+                            type="number"
+                            class="form-control"
+                            name="amount"
+                            min="1"
+                            value="1"
+                            id="{{ bet.bet_id }}_bet_amount"
+                            data-toggle="tooltip"
+                            title="One share in YES will give you $1 if the bet resolves to YES, and same for one share in NO"
+                            placeholder="amount"
+                        />
+                        <button
+                            class="btn btn-success"
+                            name="which"
+                            id="{{ bet.bet_id }}_bet_yes"
+                            value="Yes"
+                        >
+                            Buy Yes shares
+                        </button>
+                        <button
+                            class="btn btn-danger"
+                            name="which"
+                            id="{{ bet.bet_id }}_bet_no"
+                            value="No"
+                        >
+                            Buy No shares
+                        </button>
+                        <script>
+                            (() => {
+                                let share_price = (amount, which, yes_pool, no_pool) => {
+                                    let a = 1;
+                                    let b = yes_pool + no_pool - amount;
+                                    let c = -(amount * (which === "yes" ? no_pool : yes_pool));
+
+                                    let sqrt = Math.sqrt(Math.pow(b, 2) - (4 * a * c));
+
+                                    if (sqrt === NaN) {
+                                        alert("Sad days");
+                                    } else {
+                                        let price = (-b + sqrt) / (2.0 * a);
+                                        price = Math.ceil(price * 100) / 100;
+
+                                        return price;
+                                    }
+                                };
+
+                                let yes_button = document.getElementById(
+                                    "{{ bet.bet_id }}_bet_yes",
+                                );
+                                let no_button = document.getElementById(
+                                    "{{ bet.bet_id }}_bet_no",
+                                );
+                                let amount_input = document.getElementById(
+                                    "{{ bet.bet_id }}_bet_amount",
+                                );
+
+                                let c = () => {
+                                    let num_shares = parseInt(amount_input.value);
+                                    if (num_shares != "" && num_shares > 0) {
+                                        let yes_cost = share_price(num_shares, "yes", {{bet.yes_pool}}, {{bet.no_pool}});
+                                        let no_cost = share_price(num_shares, "no", {{bet.yes_pool}}, {{bet.no_pool}});
+
+                                        yes_button.innerText = `Buy Yes shares: ${yes_cost}`;
+                                        no_button.innerText = `Buy No shares: ${no_cost}`;
+                                    } else {
+                                        yes_button.innerText = "Buy Yes shares";
+                                        no_button.innerText = "Buy No shares";
+                                    }
+                                };
+                                amount_input.onchange = c;
+                                amount_input.onkeyup = c;
+                                c();
+                            })();
+                        </script>
+                    </div>
+                </form>
+                <!-- prettier-ignore -->
+                {% endif %}
+                
+    {% if bet.creator_id == user.id and not bet.closed %}
+                <form action="/close" method="post" style="margin-top: 1em">
+                    <input name="bet_id" value="{{ bet.bet_id }}" hidden />
+                    <button class="btn btn-warning">Close market</button>
+                </form>
+                <!-- prettier-ignore -->
+                {% endif %} 
+
+    {% if bet.creator_id == user.id %}
+                <form action="/resolve" method="post" style="margin-top: 1em">
+                    <div class="input-group">
+                        <div class="input-group-text">
+                            <input
+                                name="bet_id"
+                                value="{{ bet.bet_id }}"
+                                hidden
+                            />
+                            <input
+                                type="radio"
+                                id="{{ bet.bet_id }}which1"
+                                name="which"
+                                value="Yes"
+                            />
+                            <label for="{{ bet.bet_id }}which1">Yes</label>
+                            &NonBreakingSpace;
+
+                            <input
+                                type="radio"
+                                id="{{ bet.bet_id }}which2"
+                                name="which"
+                                value="No"
+                            />
+                            <label for="{{ bet.bet_id }}which2">No</label>
+                            &NonBreakingSpace;
+
+                            <input
+                                type="radio"
+                                id="{{ bet.bet_id }}which3"
+                                name="which"
+                                value="NA"
+                            />
+                            <label for="{{ bet.bet_id }}which3">N/A</label>
+                        </div>
+                        <button class="btn btn-success">Resolve market</button>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+
+            <form
+                action="/create"
+                method="post"
+                style="margin-top: 2em; margin-bottom: 2em"
+            >
+                <hr />
+                <h1>Create prediction market</h1>
+                <div class="input-group">
+                    <input
+                        name="name"
+                        class="form-control"
+                        placeholder="Prediction market name"
+                    /><br />
+                    <input
+                        name="starting_money"
+                        type="number"
+                        min="20"
+                        class="form-control"
+                        placeholder="Starting pool"
+                        data-toggle="tooltip"
+                        title="Upon prediction market creation, starting money will be turned into equal amount of yes and no shares, which are used to provide liquidity to this market. More starting money incentivizes other people to place bets, because there's more money to be made off of inaccuracies. If the probability does not move from 50/50, you will regain all of your money. You will lose money if it does change in probability, however."
+                    /><br />
+                    <button class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+        <div class="col-xl">
+            <table>
+                <!-- prettier-ignore -->
+                {% for log in logs %}
+                <tr>
+                    <td style="width: 11em">
+                        {{ log.0 | date(format="%Y-%m-%d %H:%M:%S", timezone="America/Denver") }}
+                    </td>
+                    <td style="padding-left: 1em; overflow-wrap: break-word">
+                        {{ log.1 | escape }}
+                    </td>
+                </tr>
+                <!-- prettier-ignore -->
+                {%endfor%}
+            </table>
+        </div>
+    </div>
+</div>
+
+{% endblock content %}

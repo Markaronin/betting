@@ -1,0 +1,80 @@
+{% extends "base" %}
+<!-- prettier-ignore -->
+{% block content %}
+<nav class="navbar navbar-expand-lg">
+    <div class="navbar-nav">
+        <a class="nav-item nav-link" href="/">Home</a>
+        <a class="nav-item nav-link" href="/leaderboard">Leaderboard</a>
+        <a class="nav-item nav-link active" href="#">Changelog</a>
+        <a class="nav-item nav-link" href="/about">About</a>
+    </div>
+</nav>
+
+<h1>12/19/2023</h1>
+<div>
+    <ul>
+        <li>
+            Corrected expected and max money in the leaderboard to include no
+            bets (😅) and also the liquidity pool if you created the bet
+        </li>
+        <li>Included liquidity pool information in dashboard</li>
+        <li>Added an "about" page with some basic instructions</li>
+    </ul>
+</div>
+
+<h1>10/16/2023 Part 2</h1>
+<div>Added logging</div>
+
+<h1>10/16/2023</h1>
+<div>
+    Un-fixed the "bug" about doubling shares - turns out I just can't read and
+    it actually was correct the first time
+</div>
+
+<h1>10/15/2023</h1>
+<div>
+    Made a bunch of updates to the betting website:
+    <ul>
+        <li>
+            Minimum starting pool is 20 (up from 1) - there's some funky math
+            stuff that could happen with really low starting pools (e.g. 1) so
+            this seems like a more sensible default
+        </li>
+        <li>
+            Fixed a bug where shares in the starting pool were half the amount
+            they should have been (e.g. if you put in a starting pool of $10, it
+            created 5 yes and 5 no shares, when it should have been 10 and 10)
+        </li>
+        <li>
+            When a bet resolves, the bet creator gets money back based on the
+            amount of shares in the starting pool. If the probabilities have not
+            changed at all, the creator will get the full amount back. For
+            example, you create a bet with $20, which creates 20 yes and 20 no
+            shares. You resolve that bet to YES, so you get $20 from the $20 yes
+            shares. If the probability changes, then the amount that you get
+            back may be more or less than you put in.
+            <ul>
+                <li>
+                    This means that the only source of deflation in this economy
+                    is now rounding
+                </li>
+            </ul>
+        </li>
+        <li>
+            Moved to a div-based format instead of a table. It takes up more
+            space, but now has a lot more room for other things and is more
+            friendly for smaller screens
+        </li>
+        <li>
+            Bets are now sorted by when they were created, then by name. Bets
+            created before today don't have a created date
+        </li>
+        <li>
+            Bets now show the creator's name, and if the created date exists,
+            they show that too
+        </li>
+        <li>Also added a new changelog page</li>
+    </ul>
+</div>
+
+{% endblock content %}

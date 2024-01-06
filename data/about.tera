@@ -1,0 +1,75 @@
+{% extends "base" %}
+<!-- prettier-ignore -->
+{% block content %}
+<nav class="navbar navbar-expand-lg">
+    <div class="navbar-nav">
+        <a class="nav-item nav-link" href="/">Home</a>
+        <a class="nav-item nav-link" href="/leaderboard">Leaderboard</a>
+        <a class="nav-item nav-link" href="/changelog">Changelog</a>
+        <a class="nav-item nav-link active" href="/about">About</a>
+    </div>
+</nav>
+
+<ul>
+    <li>
+        The top of the page has a leaderboard if you want to see how people are
+        doing generally
+    </li>
+    <li>
+        The way it works is you buy "shares" in "yes" or "no" for a given
+        question. Those shares cost less than $1, and resolve to $1 exactly if
+        you're right.
+    </li>
+    <li>
+        The share price changes as bets are placed. If more "yes" bets are
+        placed, then the price of "yes" increases and "no" decreases
+    </li>
+    <li>
+        Only the owner of the market can close (freeze all bets) or resolve
+        (give out money based on bets) it.
+    </li>
+    <li>
+        Resolving a market to "N/A" will refund all money spent on it to the
+        people that spent it
+    </li>
+    <li>
+        If you create a market, you have to provide some amount of starting
+        funds. These will most likely be lost - they're the incentive for people
+        to bet on that market.
+        <ul>
+            <li>
+                You'll get this money back if the probability doesn't change at
+                all from 50/50. If the probability changes in the wrong
+                direction (i.e. it changes to 0.6 change of "yes", but resolves
+                to "no"), then you'll get back more money, and you'll get back
+                less if it changes in the right direction.
+            </li>
+        </ul>
+    </li>
+    <li>
+        I'll occasionally give out $100 to all accounts in order to make people
+        not feel like money is scarce.
+    </li>
+    <li>If you have any questions or suggestions please let me know!</li>
+</ul>
+<ul>
+    <h2>Known limitations:</h2>
+    <li>
+        The page doesn't refresh dynamically - you should probably refresh
+        before making a bet to ensure the prices are up-to-date
+    </li>
+    <li>
+        People can resolve bets however they want to. I'm just kind of trusting
+        that people are gonna be honest. (Well, there's also logs and stuff)
+    </li>
+    <li>
+        At the moment it only works for questions that have 2 answers (yes and
+        no basically)
+    </li>
+    <li>
+        There have historically been infinite money glitches, though I'm pretty
+        sure those are ironed out now
+    </li>
+</ul>
+
+{% endblock content %}

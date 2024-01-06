@@ -1,0 +1,34 @@
+{% extends "base" %}
+<!-- prettier-ignore -->
+{% block content %}
+<nav class="navbar navbar-expand-lg">
+    <div class="navbar-nav">
+        <a class="nav-item nav-link" href="/">Home</a>
+        <a class="nav-item nav-link active" href="#">Leaderboard</a>
+        <a class="nav-item nav-link" href="/changelog">Changelog</a>
+        <a class="nav-item nav-link" href="/about">About</a>
+    </div>
+</nav>
+
+<table
+    data-toggle="table"
+    data-sort-name="expected_money"
+    data-sort-order="desc"
+>
+    <thead>
+        <th data-sortable="true">Name</th>
+        <th data-sortable="true">Cash</th>
+        <th data-field="expected_money" data-sortable="true">Expected Money</th>
+        <th data-sortable="true">Max Money</th>
+    </thead>
+    {% for entry in leaderboard_entries %}
+    <tr>
+        <td>{{ entry.name }}</td>
+        <td>{{ entry.liquid_money | round(precision=2) }}</td>
+        <td>{{ entry.expected_money | round(precision=2) }}</td>
+        <td>{{ entry.max_money | round(precision=2) }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endblock content %}

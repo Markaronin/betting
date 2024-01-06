@@ -1,0 +1,9 @@
+{% extends "base" %}
+<!-- prettier-ignore -->
+{% block content %}
+<h1>Login</h1>
+<form method="post">
+    <input type="text" name="user_id" placeholder="User ID" />
+    <button>Login</button>
+</form>
+{% endblock content %}
