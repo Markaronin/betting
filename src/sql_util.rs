@@ -12,6 +12,8 @@ pub struct DbSecret {
 
 pub async fn get_db_connection_pool() -> Result<Pool<Postgres>, sqlx::Error> {
     let secret: DbSecret = get_secret("rds!db-52c11fca-17e2-4348-a7f4-ba215e56a40b").await;
+    let url_encoded_password: String =
+        url::form_urlencoded::byte_serialize(secret.password.as_bytes()).collect();
 
     let domain = "terraform-20230820160825878800000001.cxp0he9jcakq.us-east-1.rds.amazonaws.com";
     let port = 5432;
@@ -21,7 +23,7 @@ pub async fn get_db_connection_pool() -> Result<Pool<Postgres>, sqlx::Error> {
 
     let mut url = Url::parse(&connection_string).unwrap();
     url.set_username(&secret.username).unwrap();
-    url.set_password(Some(&secret.password)).unwrap();
+    url.set_password(Some(&url_encoded_password)).unwrap();
 
     PgPoolOptions::new()
         .max_connections(5)
