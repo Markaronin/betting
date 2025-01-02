@@ -7,6 +7,7 @@
     -   Also change sql_util to point at a different postgres database endpoint, hopefully locally
     -   Change dynamodb to point at different tables
 -   Cargo run the project and visit localhost:8080
+-   I am very happy to sit down with anybody for an hour and go over how the codebase is set up
 
 # Deployment
 
