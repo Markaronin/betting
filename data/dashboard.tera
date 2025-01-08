@@ -27,10 +27,8 @@
                 </h3>
 
                 <p>
-                    Created by {{ bet.creator_name }} {% if
-                    bet.created_seconds_since_epoch %} at
+                    Created by {{ bet.creator_name }} at
                     {{ bet.created_seconds_since_epoch | date(format="%H:%M, %m/%d/%Y", timezone="America/Denver") }}
-                    {% endif %}
                 </p>
                 <p>
                     Currently has a liquidity pool of

@@ -12,12 +12,12 @@ use axum::{
     Form, Router,
 };
 use axum_lambda_util::run_router;
-use dynamodb::{delete_bet, get_bet, get_user, list_bets, list_users, put_bet, set_user_money};
+use futures::future::join_all;
 use lambda_web::LambdaError;
 use log_util::init_default_debug_logger;
 use login::login_page;
 use model::{Bet, LogMessage, User, UserBet, YesOrNo, YesOrNoOrNA};
-use secretsmanager::get_secret;
+use secrets::Secrets;
 use serde::{Deserialize, Serialize};
 use sql_util::get_db_connection_pool;
 use sqlx::{Pool, Postgres};
@@ -25,17 +25,13 @@ use tera::Tera;
 use user_id_cookie::ExtractUserId;
 use uuid::Uuid;
 
-use crate::dynamodb::add_user_money;
-
-mod aws;
 mod axum_lambda_util;
-mod dynamodb;
 mod jwt;
 mod leaderboard;
 mod log_util;
 mod login;
 mod model;
-mod secretsmanager;
+mod secrets;
 mod sql_util;
 mod user_id_cookie;
 
@@ -45,7 +41,7 @@ struct DashboardBetInfo {
     name: String,
     creator_id: String,
     creator_name: String,
-    created_seconds_since_epoch: Option<usize>,
+    created_seconds_since_epoch: usize,
     yes_pool: f64,
     no_pool: f64,
     probability_of_yes: f64,
@@ -57,33 +53,25 @@ async fn dashboard(
     ExtractUserId(user_id): ExtractUserId,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
-    let logs: Vec<LogMessage> =
-        sqlx::query_as("SELECT * FROM betting_logs order by created_at DESC LIMIT 100")
-            .fetch_all(&app_state.pool)
-            .await
-            .unwrap();
+    let logs = LogMessage::list(&app_state.pool).await;
 
-    let mut bets = list_bets(&app_state.dynamodb_client).await;
+    let mut bets = Bet::list(&app_state.pool).await;
 
     bets.sort_by(|a, b| {
-        match (
-            &a.created_seconds_since_epoch,
-            &b.created_seconds_since_epoch,
-        ) {
-            (Some(a_created), Some(b_created)) => a_created.cmp(b_created).reverse(),
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, None) => a.name.cmp(&b.name),
-        }
+        a.created_seconds_since_epoch
+            .cmp(&b.created_seconds_since_epoch)
+            .reverse()
     });
 
     let mut context = tera::Context::new();
 
-    let users = list_users(&app_state.dynamodb_client)
+    let users = User::list(&app_state.pool)
         .await
         .into_iter()
         .map(|user| (user.id.clone(), user))
         .collect::<BTreeMap<String, User>>();
+
+    let user_bets = UserBet::list(&app_state.pool).await;
 
     let mut processed_bets = Vec::new();
 
@@ -101,8 +89,18 @@ async fn dashboard(
             yes_pool: bet.yes_pool,
             no_pool: bet.no_pool,
             probability_of_yes: bet.no_pool / (bet.yes_pool + bet.no_pool),
-            user_yes: bet.yes_bets.get(&user_id).cloned(),
-            user_no: bet.no_bets.get(&user_id).cloned(),
+            user_yes: user_bets
+                .iter()
+                .find(|user_bet| {
+                    user_bet.is_yes && user_bet.bet_id == bet.id && user_bet.user_id == user_id
+                })
+                .cloned(),
+            user_no: user_bets
+                .iter()
+                .find(|user_bet| {
+                    !user_bet.is_yes && user_bet.bet_id == bet.id && user_bet.user_id == user_id
+                })
+                .cloned(),
             closed: bet.closed,
         };
 
@@ -164,12 +162,10 @@ async fn place_bet(
     State(app_state): State<AppState>,
     Form(request): Form<PlaceBetRequest>,
 ) -> Response {
-    let user = get_user(&app_state.dynamodb_client, &user_id)
-        .await
-        .unwrap();
+    let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
 
     if request.amount > 0 {
-        match get_bet(&app_state.dynamodb_client, &request.bet_id).await {
+        match Bet::get_by_id(&app_state.pool, &request.bet_id).await {
             Some(mut bet) => {
                 if let Ok(spent) =
                     share_price(request.amount, &request.which, bet.yes_pool, bet.no_pool)
@@ -178,21 +174,20 @@ async fn place_bet(
                         if bet.closed {
                             StatusCode::BAD_REQUEST.into_response()
                         } else {
-                            let user_bets = match &request.which {
-                                YesOrNo::Yes => &mut bet.yes_bets,
-                                YesOrNo::No => &mut bet.no_bets,
-                            };
+                            let is_yes = request.which.is_yes();
+                            let mut user_bet =
+                                UserBet::get(&app_state.pool, &user_id, &request.bet_id, is_yes)
+                                    .await
+                                    .unwrap_or(UserBet {
+                                        user_id: user_id.clone(),
+                                        bet_id: request.bet_id.clone(),
+                                        is_yes,
+                                        amount: 0,
+                                        spent: 0.0,
+                                    });
 
-                            user_bets
-                                .entry(user_id.clone())
-                                .and_modify(|user_bet| {
-                                    user_bet.amount += request.amount;
-                                    user_bet.spent += spent;
-                                })
-                                .or_insert(UserBet {
-                                    amount: request.amount,
-                                    spent,
-                                });
+                            user_bet.amount += request.amount;
+                            user_bet.spent += spent;
 
                             match request.which {
                                 YesOrNo::Yes => {
@@ -205,13 +200,16 @@ async fn place_bet(
                             bet.yes_pool += spent;
                             bet.no_pool += spent;
 
-                            set_user_money(
-                                &app_state.dynamodb_client,
-                                &user_id,
-                                user.money - spent,
+                            // All of the DB updates here
+                            User::add_money(&app_state.pool, &user_id, -spent).await;
+                            user_bet.update_or_insert(&app_state.pool).await;
+                            Bet::update_pools(
+                                &app_state.pool,
+                                &request.bet_id,
+                                bet.yes_pool,
+                                bet.no_pool,
                             )
                             .await;
-                            put_bet(&app_state.dynamodb_client, bet.clone()).await;
 
                             LogMessage::insert(
                                 &app_state.pool,
@@ -220,8 +218,7 @@ async fn place_bet(
                                     user.name, request.amount, request.which, bet.name, spent
                                 ),
                             )
-                            .await
-                            .unwrap();
+                            .await;
 
                             Redirect::to("/").into_response()
                         }
@@ -255,9 +252,7 @@ async fn create_bet(
 ) -> Response {
     let bet_id = Uuid::new_v4().to_string();
 
-    let user = get_user(&app_state.dynamodb_client, &user_id)
-        .await
-        .unwrap();
+    let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
 
     if request.starting_money < 20 {
         (
@@ -266,44 +261,44 @@ async fn create_bet(
         )
             .into_response()
     } else if user.money >= request.starting_money as f64 {
-        add_user_money(
-            &app_state.dynamodb_client,
-            &user_id,
-            -(request.starting_money as f64),
-        )
+        User::add_money(&app_state.pool, &user_id, -(request.starting_money as f64)).await;
+
+        let now = SystemTime::now();
+        let duration = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
+        let created_seconds_since_epoch = duration.as_secs() as usize;
+
+        Bet {
+            id: bet_id.clone(),
+            creator_id: user_id.clone(),
+            name: request.name.clone(),
+            created_seconds_since_epoch,
+            closed: false,
+            yes_pool: request.starting_money as f64,
+            no_pool: request.starting_money as f64,
+        }
+        .insert(&app_state.pool)
         .await;
 
         // When a user starts a bet, they use the money to buy equal amounts of yes shares and no shares
         // (price of yes share + price of no share = 1)
         // Those shares are not "owned" by the creator, but are instead used to provide liquidity
-        let mut yes_bets = BTreeMap::new();
-        yes_bets.insert(
-            user_id.clone(),
-            UserBet {
-                amount: 0,
-                spent: request.starting_money as f64 / 2.0,
-            },
-        );
-        let no_bets = yes_bets.clone();
-
-        let now = SystemTime::now();
-        let duration = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
-        let seconds_since_epoch = duration.as_secs() as usize;
-
-        put_bet(
-            &app_state.dynamodb_client,
-            Bet {
-                id: bet_id.clone(),
-                creator_id: user_id,
-                name: request.name.clone(),
-                created_seconds_since_epoch: Some(seconds_since_epoch),
-                closed: false,
-                yes_pool: request.starting_money as f64,
-                no_pool: request.starting_money as f64,
-                yes_bets,
-                no_bets,
-            },
-        )
+        UserBet {
+            user_id: user_id.clone(),
+            bet_id: bet_id.clone(),
+            is_yes: true,
+            amount: 0,
+            spent: request.starting_money as f64 / 2.0,
+        }
+        .insert(&app_state.pool)
+        .await;
+        UserBet {
+            user_id: user_id.clone(),
+            bet_id: bet_id.clone(),
+            is_yes: false,
+            amount: 0,
+            spent: request.starting_money as f64 / 2.0,
+        }
+        .insert(&app_state.pool)
         .await;
 
         LogMessage::insert(
@@ -313,8 +308,7 @@ async fn create_bet(
                 user.name, &request.name, request.starting_money
             ),
         )
-        .await
-        .unwrap();
+        .await;
 
         Redirect::to("/").into_response()
     } else {
@@ -335,24 +329,20 @@ async fn close_bet(
     State(app_state): State<AppState>,
     Form(request): Form<CloseBetRequest>,
 ) -> Response {
-    let bet = get_bet(&app_state.dynamodb_client, &request.bet_id).await;
+    let bet = Bet::get_by_id(&app_state.pool, &request.bet_id).await;
 
     match bet {
-        Some(mut bet) => {
+        Some(bet) => {
             if bet.creator_id == user_id {
-                let user = get_user(&app_state.dynamodb_client, &user_id)
-                    .await
-                    .unwrap();
+                let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
 
-                bet.closed = true;
-                put_bet(&app_state.dynamodb_client, bet.clone()).await;
+                Bet::close(&app_state.pool, &bet.id).await;
 
                 LogMessage::insert(
                     &app_state.pool,
                     &format!("{} closed the market \"{}\"", user.name, bet.name),
                 )
-                .await
-                .unwrap();
+                .await;
 
                 Redirect::to("/").into_response()
             } else {
@@ -373,47 +363,48 @@ async fn resolve_bet(
     State(app_state): State<AppState>,
     Form(request): Form<ResolveBetRequest>,
 ) -> Response {
-    let bet = get_bet(&app_state.dynamodb_client, &request.bet_id).await;
+    let bet = Bet::get_by_id(&app_state.pool, &request.bet_id).await;
 
     match bet {
         Some(bet) => {
             if bet.creator_id == user_id {
-                let user = get_user(&app_state.dynamodb_client, &user_id)
-                    .await
-                    .unwrap();
+                let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
+                let user_bets = UserBet::get_by_bet_id(&app_state.pool, &request.bet_id).await;
 
-                delete_bet(&app_state.dynamodb_client, &request.bet_id).await;
+                Bet::delete(&app_state.pool, &request.bet_id).await;
 
                 match request.which {
                     YesOrNoOrNA::Yes => {
-                        add_user_money(&app_state.dynamodb_client, &bet.creator_id, bet.yes_pool)
-                            .await;
-                        for (user_id, user_bet) in bet.yes_bets.iter() {
-                            add_user_money(
-                                &app_state.dynamodb_client,
-                                user_id,
-                                user_bet.amount as f64,
-                            )
-                            .await;
-                        }
+                        User::add_money(&app_state.pool, &bet.creator_id, bet.yes_pool).await;
+                        join_all(user_bets.iter().filter(|user_bet| user_bet.is_yes).map(
+                            |user_bet| {
+                                User::add_money(
+                                    &app_state.pool,
+                                    &user_bet.user_id,
+                                    user_bet.amount as f64,
+                                )
+                            },
+                        ))
+                        .await;
                     }
                     YesOrNoOrNA::No => {
-                        add_user_money(&app_state.dynamodb_client, &bet.creator_id, bet.no_pool)
-                            .await;
-                        for (user_id, user_bet) in bet.no_bets.iter() {
-                            add_user_money(
-                                &app_state.dynamodb_client,
-                                user_id,
-                                user_bet.amount as f64,
-                            )
-                            .await;
-                        }
+                        User::add_money(&app_state.pool, &bet.creator_id, bet.no_pool).await;
+                        join_all(user_bets.iter().filter(|user_bet| !user_bet.is_yes).map(
+                            |user_bet| {
+                                User::add_money(
+                                    &app_state.pool,
+                                    &user_bet.user_id,
+                                    user_bet.amount as f64,
+                                )
+                            },
+                        ))
+                        .await;
                     }
                     YesOrNoOrNA::NA => {
-                        for (user_id, user_bet) in bet.yes_bets.iter().chain(bet.no_bets.iter()) {
-                            add_user_money(&app_state.dynamodb_client, user_id, user_bet.spent)
-                                .await;
-                        }
+                        join_all(user_bets.iter().map(|user_bet| {
+                            User::add_money(&app_state.pool, &user_bet.user_id, user_bet.spent)
+                        }))
+                        .await;
                     }
                 }
 
@@ -424,8 +415,7 @@ async fn resolve_bet(
                         user.name, bet.name, request.which
                     ),
                 )
-                .await
-                .unwrap();
+                .await;
 
                 Redirect::to("/").into_response()
             } else {
@@ -437,7 +427,7 @@ async fn resolve_bet(
 }
 
 async fn give_money(ExtractUserId(user_id): ExtractUserId, State(app_state): State<AppState>) {
-    let users = list_users(&app_state.dynamodb_client).await;
+    let users = User::list(&app_state.pool).await;
     if user_id
         == users
             .iter()
@@ -446,15 +436,14 @@ async fn give_money(ExtractUserId(user_id): ExtractUserId, State(app_state): Sta
             .id
     {
         for user in users {
-            add_user_money(&app_state.dynamodb_client, &user.id, 100.0).await
+            User::add_money(&app_state.pool, &user.id, 100.0).await
         }
 
         LogMessage::insert(
             &app_state.pool,
             "$100 has been added to everybody's account",
         )
-        .await
-        .unwrap();
+        .await;
     }
 }
 
@@ -488,7 +477,6 @@ type AppEngine = Tera;
 #[derive(Clone, FromRef)]
 pub struct AppState {
     engine: AppEngine,
-    dynamodb_client: aws_sdk_dynamodb::Client,
     secret: String,
     pool: Pool<Postgres>,
 }
@@ -497,12 +485,11 @@ pub struct AppState {
 async fn main() -> Result<(), LambdaError> {
     init_default_debug_logger();
 
-    let config = aws_config::load_from_env().await;
-    let dynamodb_local_config = aws_sdk_dynamodb::config::Builder::from(&config).build();
+    let env = Secrets::load().await;
 
-    let dynamodb_client = aws_sdk_dynamodb::Client::from_conf(dynamodb_local_config);
-
-    let pool = get_db_connection_pool().await.unwrap();
+    let pool = get_db_connection_pool(&env.db_username, &env.db_password)
+        .await
+        .unwrap();
 
     // Set up the Handlebars engine with the same route paths as the Axum router
     let mut hbs = Tera::default();
@@ -515,15 +502,6 @@ async fn main() -> Result<(), LambdaError> {
         ("about", include_str!("../data/about.tera")),
     ])
     .unwrap();
-
-    #[derive(Deserialize)]
-    pub struct AuthSecret {
-        #[serde(rename = "auth-token-signer")]
-        pub auth_token_signer: String,
-    }
-    let secret = get_secret::<AuthSecret>("markaronin-auth")
-        .await
-        .auth_token_signer;
 
     let app = Router::new()
         .route("/", get(dashboard))
@@ -547,8 +525,7 @@ async fn main() -> Result<(), LambdaError> {
         )
         .with_state(AppState {
             engine: hbs,
-            dynamodb_client,
-            secret,
+            secret: env.auth_secret,
             pool,
         });
 

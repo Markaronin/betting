@@ -6,7 +6,7 @@ use axum::{
 use axum_extra::extract::{cookie::Cookie, CookieJar};
 use serde::Deserialize;
 
-use crate::{dynamodb::get_user, jwt::create_jwt, user_id_cookie::ExtractUserId, AppState};
+use crate::{jwt::create_jwt, model::User, user_id_cookie::ExtractUserId, AppState};
 
 pub async fn login_page(
     possible_user_id_cookie: Option<ExtractUserId>,
@@ -33,7 +33,7 @@ pub async fn login(
     State(app_state): State<AppState>,
     Form(request): Form<LoginForm>,
 ) -> Response {
-    match get_user(&app_state.dynamodb_client, &request.user_id).await {
+    match User::get_by_id(&app_state.pool, &request.user_id).await {
         Some(_) => {
             let jwt = create_jwt(&request.user_id, &app_state.secret);
 

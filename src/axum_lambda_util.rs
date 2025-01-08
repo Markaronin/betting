@@ -12,8 +12,9 @@ fn get_default_cors_policy() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
             |origin: &HeaderValue, _request_parts: &request::Parts| {
-                origin.as_bytes().ends_with(b".markaronin.com")
-                    || origin.as_bytes().starts_with(b"http://localhost:")
+                (is_running_on_lambda() && origin.as_bytes().ends_with(b"betting.markaronin.com"))
+                    || (!is_running_on_lambda()
+                        && origin.as_bytes().starts_with(b"http://localhost:"))
             },
         ))
         .allow_methods([

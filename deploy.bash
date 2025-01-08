@@ -1,8 +1,5 @@
-#!/bin/zsh
+#!/bin/bash
 set -eu
-
-# Used to get aliases on mac
-source ~/.zshrc
 
 if [ $# -eq 0 ]
   then

@@ -5,7 +5,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    dynamodb::{list_bets, list_users},
+    model::{Bet, User, UserBet},
     user_id_cookie::ExtractUserId,
     AppState,
 };
@@ -22,9 +22,11 @@ pub async fn leaderboard(
     ExtractUserId(_user_id): ExtractUserId,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
-    let bets = list_bets(&app_state.dynamodb_client).await;
+    let bets = Bet::list(&app_state.pool).await;
 
-    let users = list_users(&app_state.dynamodb_client).await;
+    let users = User::list(&app_state.pool).await;
+
+    let user_bets = UserBet::list(&app_state.pool).await;
 
     let mut context = tera::Context::new();
 
@@ -47,15 +49,23 @@ pub async fn leaderboard(
                             0.0
                         };
 
-                        let yes_bet_money = bet
-                            .yes_bets
-                            .get(&user.id)
+                        let yes_bet_money = user_bets
+                            .iter()
+                            .find(|user_bet| {
+                                user_bet.is_yes
+                                    && user_bet.user_id == user.id
+                                    && user_bet.bet_id == bet.id
+                            })
                             .map(|yes_bet| yes_bet.amount as f64 * probability_of_yes)
                             .unwrap_or(0.0);
 
-                        let no_bet_money = bet
-                            .no_bets
-                            .get(&user.id)
+                        let no_bet_money = user_bets
+                            .iter()
+                            .find(|user_bet| {
+                                !user_bet.is_yes
+                                    && user_bet.user_id == user.id
+                                    && user_bet.bet_id == bet.id
+                            })
                             .map(|no_bet| no_bet.amount as f64 * (1.0 - probability_of_yes))
                             .unwrap_or(0.0);
 
@@ -66,20 +76,37 @@ pub async fn leaderboard(
                 + bets
                     .iter()
                     .map(|bet| {
-                        let yes_amount = bet
-                            .yes_bets
-                            .get(&user.id)
+                        let yes_amount = user_bets
+                            .iter()
+                            .find(|user_bet| {
+                                user_bet.is_yes
+                                    && user_bet.user_id == user.id
+                                    && user_bet.bet_id == bet.id
+                            })
                             .map(|yes_bet| {
                                 yes_bet.amount as f64
-                                    + if bet.id == user.id { bet.yes_pool } else { 0.0 }
+                                    + if bet.creator_id == user.id {
+                                        bet.yes_pool
+                                    } else {
+                                        0.0
+                                    }
                             })
                             .unwrap_or(0.0);
-                        let no_amount = bet
-                            .no_bets
-                            .get(&user.id)
+
+                        let no_amount = user_bets
+                            .iter()
+                            .find(|user_bet| {
+                                !user_bet.is_yes
+                                    && user_bet.user_id == user.id
+                                    && user_bet.bet_id == bet.id
+                            })
                             .map(|no_bet| {
                                 no_bet.amount as f64
-                                    + if bet.id == user.id { bet.no_pool } else { 0.0 }
+                                    + if bet.creator_id == user.id {
+                                        bet.no_pool
+                                    } else {
+                                        0.0
+                                    }
                             })
                             .unwrap_or(0.0);
                         yes_amount.max(no_amount)
