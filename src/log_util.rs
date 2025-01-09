@@ -1,26 +1,17 @@
+use env_logger::builder;
 use log::LevelFilter;
-use simple_logger::SimpleLogger;
-
-pub fn get_default_logger() -> SimpleLogger {
-    SimpleLogger::new()
-        .with_module_level("actix_web", LevelFilter::Debug)
-        .with_module_level("aws_sdk_s3", LevelFilter::Info)
-        .with_module_level("aws_sdk_dynamodb", LevelFilter::Info)
-        .with_module_level("aws_smithy_client", LevelFilter::Info)
-        .with_module_level("aws_smithy_runtime_api", LevelFilter::Info)
-        .with_module_level("aws_smithy_runtime", LevelFilter::Info)
-        .with_module_level("aws_smithy_http_tower", LevelFilter::Info)
-        .with_module_level("hyper", LevelFilter::Info)
-        .with_module_level("reqwest", LevelFilter::Info)
-        .with_module_level("rustls", LevelFilter::Info)
-        .with_module_level("aws_config", LevelFilter::Warn)
-        .with_module_level("aws_credential_types", LevelFilter::Warn)
-        .with_module_level("tracing", LevelFilter::Warn)
-}
 
 pub fn init_default_debug_logger() {
-    get_default_logger()
-        .with_level(LevelFilter::Debug)
-        .init()
-        .unwrap()
+    builder()
+        .filter_level(LevelFilter::Debug)
+        .filter_module("aws_config", LevelFilter::Warn)
+        .filter_module("aws_credential_types", LevelFilter::Warn)
+        .filter_module("aws_smithy_client", LevelFilter::Info)
+        .filter_module("aws_smithy_runtime_api", LevelFilter::Info)
+        .filter_module("aws_smithy_runtime", LevelFilter::Info)
+        .filter_module("aws_smithy_http_tower", LevelFilter::Info)
+        .filter_module("hyper", LevelFilter::Info)
+        .filter_module("rustls", LevelFilter::Info)
+        .filter_module("tracing", LevelFilter::Warn)
+        .init();
 }

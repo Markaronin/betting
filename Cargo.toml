@@ -39,8 +39,8 @@ uuid = { version = "1.4", features = ["v4"] }
 url = "2.4.1"
 
 # Used for logging
-log = "0.4.19"
-simple_logger = "2.3.0"
+log = "0.4.22"
+env_logger = "0.11.6"
 
 # Used for running this locally with environment variables and/or a .env file
 envconfig = "0.11.0"
