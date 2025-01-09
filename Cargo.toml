@@ -4,25 +4,44 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Needed to fetch secrets for cookie signing and db login
 aws-config = { version = "1.5.13"}
 aws-sdk-secretsmanager = { version = "1.57.0"}
+
+# Needed for the web framework and running it on a lambda
 lambda-web = { version = "0.2.1", features=["hyper"] }
-futures = "0.3.28"
-jsonwebtoken = "8.3.0"
 axum = { version = "0.6.19", features = ["form", "macros"] }
 axum-extra = { version = "0.7.7", features = ["cookie"] }
+http = "0.2.9"
+tower-http = { version = "0.4.3", features = ["cors"] }
+
+# Needed for authentication
+jsonwebtoken = "8.3.0"
+
+# Async utility
+futures = "0.3.28"
+tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
+
+# Serializing and deserializing (used for sql and secrets)
 serde = { version = "1.0.174", features = ["derive"] }
 serde_json = "1.0.103"
+
+# Templating language used for frontend
 tera = { version = "1.19.1", features = ["builtins"] }
-tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
-tokio-stream = "0.1.14"
+
+# Sql framework
 sqlx = { version = "0.7", features = [ "runtime-tokio", "tls-rustls", "macros", "uuid", "postgres", "chrono" ] }
+
+# Used for generating IDs
 uuid = { version = "1.4", features = ["v4"] }
+
+# Used for urlencoding database password
 url = "2.4.1"
+
+# Used for logging
 log = "0.4.19"
 simple_logger = "2.3.0"
-http = "0.2.9"
-itertools = "0"
-tower-http = { version = "0.4.3", features = ["cors"] }
+
+# Used for running this locally with environment variables and/or a .env file
 envconfig = "0.11.0"
 dotenvy = "0.15.7"

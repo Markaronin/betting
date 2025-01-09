@@ -596,7 +596,6 @@ dependencies = [
  "envconfig",
  "futures",
  "http 0.2.12",
- "itertools",
  "jsonwebtoken",
  "lambda-web",
  "log",
@@ -606,7 +605,6 @@ dependencies = [
  "sqlx",
  "tera",
  "tokio",
- "tokio-stream",
  "tower-http",
  "url",
  "uuid",
@@ -1559,15 +1557,6 @@ checksum = "62f822373a4fe84d4bb149bf54e584a7f4abec90e072ed49cda0edea5b95471f"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.2",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
 ]
 
 [[package]]
