@@ -1,7 +1,8 @@
 use aws_config::{retry::RetryConfig, BehaviorVersion, Region};
 use envconfig::Envconfig;
-use lambda_web::is_running_on_lambda;
 use serde::{de::DeserializeOwned, Deserialize};
+
+use crate::axum_lambda_util::is_running_on_lambda;
 
 async fn get_secret<T>(client: &aws_sdk_secretsmanager::Client, name: &str) -> T
 where

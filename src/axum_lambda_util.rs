@@ -1,12 +1,13 @@
-use std::net::SocketAddr;
-
 use axum::Router;
 use http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
     request, HeaderValue, Method,
 };
-use lambda_web::{is_running_on_lambda, run_hyper_on_lambda, LambdaError};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+
+pub fn is_running_on_lambda() -> bool {
+    std::env::var("AWS_LAMBDA_RUNTIME_API").is_ok()
+}
 
 fn get_default_cors_policy() -> CorsLayer {
     CorsLayer::new()
@@ -32,16 +33,19 @@ fn get_default_cors_policy() -> CorsLayer {
         .allow_credentials(true)
 }
 
-pub async fn run_router(router: Router) -> Result<(), LambdaError> {
+pub async fn run_router(router: Router) {
     let router = router.layer(get_default_cors_policy());
 
     if is_running_on_lambda() {
-        run_hyper_on_lambda(router).await?;
+        // To run with AWS Lambda runtime, wrap in our `LambdaLayer`
+        let app = tower::ServiceBuilder::new()
+            .layer(axum_aws_lambda::LambdaLayer::default())
+            .service(router);
+
+        lambda_http::run(app).await.unwrap();
     } else {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-        axum::Server::bind(&addr)
-            .serve(router.into_make_service())
-            .await?;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, router).await.unwrap();
     }
-    Ok(())
 }

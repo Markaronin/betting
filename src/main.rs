@@ -13,7 +13,6 @@ use axum::{
 };
 use axum_lambda_util::run_router;
 use futures::future::join_all;
-use lambda_web::LambdaError;
 use log_util::init_default_debug_logger;
 use login::login_page;
 use model::{Bet, LogMessage, User, UserBet, YesOrNo, YesOrNoOrNA};
@@ -482,7 +481,7 @@ pub struct AppState {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), LambdaError> {
+async fn main() {
     init_default_debug_logger();
 
     let env = Secrets::load().await;
@@ -529,5 +528,5 @@ async fn main() -> Result<(), LambdaError> {
             pool,
         });
 
-    run_router(app).await
+    run_router(app).await;
 }

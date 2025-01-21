@@ -9,11 +9,12 @@ aws-config = { version = "1.5.13"}
 aws-sdk-secretsmanager = { version = "1.57.0"}
 
 # Needed for the web framework and running it on a lambda
-lambda-web = { version = "0.2.1", features=["hyper"] }
-axum = { version = "0.6.19", features = ["form", "macros"] }
-axum-extra = { version = "0.7.7", features = ["cookie"] }
-http = "0.2.9"
-tower-http = { version = "0.4.3", features = ["cors"] }
+axum = { version = "0.7.9", features = ["form", "macros"] }
+axum-aws-lambda = "0.9.0"
+axum-extra = { version = "0.9.6", features = ["cookie"] }
+http = "1.2.0"
+tower-http = { version = "0.6.2", features = ["cors"] }
+lambda_http = "0.11.1"
 
 # Needed for authentication
 jsonwebtoken = "8.3.0"
@@ -21,6 +22,7 @@ jsonwebtoken = "8.3.0"
 # Async utility
 futures = "0.3.28"
 tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
+tower = "0.4.3"
 
 # Serializing and deserializing (used for sql and secrets)
 serde = { version = "1.0.174", features = ["derive"] }
