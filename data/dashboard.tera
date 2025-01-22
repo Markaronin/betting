@@ -68,6 +68,16 @@
                     <input name="bet_id" value="{{ bet.bet_id }}" hidden />
                     <div class="input-group">
                         <input
+                            type="hidden"
+                            name="expected_yes_pool"
+                            value="{{ bet.yes_pool }}"
+                        />
+                        <input
+                            type="hidden"
+                            name="expected_no_pool"
+                            value="{{ bet.no_pool }}"
+                        />
+                        <input
                             type="number"
                             class="form-control"
                             name="amount"

@@ -149,11 +149,13 @@ fn share_price(amount: usize, which: &YesOrNo, yes_pool: f64, no_pool: f64) -> R
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct PlaceBetRequest {
     bet_id: String,
     amount: usize,
     which: YesOrNo,
+    expected_yes_pool: f64,
+    expected_no_pool: f64,
 }
 #[debug_handler]
 async fn place_bet(
@@ -163,66 +165,81 @@ async fn place_bet(
 ) -> Response {
     let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
 
+    const ERROR_MARGIN: f64 = 0.0000001;
     if request.amount > 0 {
         match Bet::get_by_id(&app_state.pool, &request.bet_id).await {
             Some(mut bet) => {
                 if let Ok(spent) =
                     share_price(request.amount, &request.which, bet.yes_pool, bet.no_pool)
                 {
-                    if user.money >= spent {
-                        if bet.closed {
-                            StatusCode::BAD_REQUEST.into_response()
+                    if (request.expected_no_pool - bet.no_pool).abs() < ERROR_MARGIN
+                        && (request.expected_yes_pool - bet.yes_pool).abs() < ERROR_MARGIN
+                    {
+                        if user.money >= spent {
+                            if bet.closed {
+                                StatusCode::BAD_REQUEST.into_response()
+                            } else {
+                                let is_yes = request.which.is_yes();
+                                let mut user_bet = UserBet::get(
+                                    &app_state.pool,
+                                    &user_id,
+                                    &request.bet_id,
+                                    is_yes,
+                                )
+                                .await
+                                .unwrap_or(UserBet {
+                                    user_id: user_id.clone(),
+                                    bet_id: request.bet_id.clone(),
+                                    is_yes,
+                                    amount: 0,
+                                    spent: 0.0,
+                                });
+
+                                user_bet.amount += request.amount;
+                                user_bet.spent += spent;
+
+                                match request.which {
+                                    YesOrNo::Yes => {
+                                        bet.yes_pool -= request.amount as f64;
+                                    }
+                                    YesOrNo::No => {
+                                        bet.no_pool -= request.amount as f64;
+                                    }
+                                };
+                                bet.yes_pool += spent;
+                                bet.no_pool += spent;
+
+                                // All of the DB updates here
+                                User::add_money(&app_state.pool, &user_id, -spent).await;
+                                user_bet.update_or_insert(&app_state.pool).await;
+                                Bet::update_pools(
+                                    &app_state.pool,
+                                    &request.bet_id,
+                                    bet.yes_pool,
+                                    bet.no_pool,
+                                )
+                                .await;
+
+                                LogMessage::insert(
+                                    &app_state.pool,
+                                    &format!(
+                                        "{} bought {} {} shares in \"{}\" for ${}",
+                                        user.name, request.amount, request.which, bet.name, spent
+                                    ),
+                                )
+                                .await;
+
+                                Redirect::to("/").into_response()
+                            }
                         } else {
-                            let is_yes = request.which.is_yes();
-                            let mut user_bet =
-                                UserBet::get(&app_state.pool, &user_id, &request.bet_id, is_yes)
-                                    .await
-                                    .unwrap_or(UserBet {
-                                        user_id: user_id.clone(),
-                                        bet_id: request.bet_id.clone(),
-                                        is_yes,
-                                        amount: 0,
-                                        spent: 0.0,
-                                    });
-
-                            user_bet.amount += request.amount;
-                            user_bet.spent += spent;
-
-                            match request.which {
-                                YesOrNo::Yes => {
-                                    bet.yes_pool -= request.amount as f64;
-                                }
-                                YesOrNo::No => {
-                                    bet.no_pool -= request.amount as f64;
-                                }
-                            };
-                            bet.yes_pool += spent;
-                            bet.no_pool += spent;
-
-                            // All of the DB updates here
-                            User::add_money(&app_state.pool, &user_id, -spent).await;
-                            user_bet.update_or_insert(&app_state.pool).await;
-                            Bet::update_pools(
-                                &app_state.pool,
-                                &request.bet_id,
-                                bet.yes_pool,
-                                bet.no_pool,
-                            )
-                            .await;
-
-                            LogMessage::insert(
-                                &app_state.pool,
-                                &format!(
-                                    "{} bought {} {} shares in \"{}\" for ${}",
-                                    user.name, request.amount, request.which, bet.name, spent
-                                ),
-                            )
-                            .await;
-
-                            Redirect::to("/").into_response()
+                            (StatusCode::BAD_REQUEST, "Not enough money").into_response()
                         }
                     } else {
-                        (StatusCode::BAD_REQUEST, "Not enough money").into_response()
+                        (
+                            StatusCode::CONFLICT,
+                            "Price changed while this request was in flight (Reload the page and try again)",
+                        )
+                            .into_response()
                     }
                 } else {
                     (
