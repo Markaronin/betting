@@ -12,7 +12,6 @@ use axum::{
     Form, Router,
 };
 use axum_lambda_util::run_router;
-use futures::future::join_all;
 use log_util::init_default_debug_logger;
 use login::login_page;
 use model::{Bet, LogMessage, User, UserBet, YesOrNo, YesOrNoOrNA};
@@ -52,6 +51,7 @@ async fn dashboard(
     ExtractUserId(user_id): ExtractUserId,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
+    // No need for transactions in this function because it's readonly. Worst thing that happens is that it gets data from before and after a transaction
     let logs = LogMessage::list(&app_state.pool).await;
 
     let mut bets = Bet::list(&app_state.pool).await;
@@ -163,11 +163,13 @@ async fn place_bet(
     State(app_state): State<AppState>,
     Form(request): Form<PlaceBetRequest>,
 ) -> Response {
-    let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
+    let mut tx = app_state.pool.begin().await.unwrap();
+
+    let user = User::get_for_update_by_id(&mut tx, &user_id).await.unwrap();
 
     const ERROR_MARGIN: f64 = 0.0000001;
     if request.amount > 0 {
-        match Bet::get_by_id(&app_state.pool, &request.bet_id).await {
+        match Bet::get_for_update_by_id(&mut tx, &request.bet_id).await {
             Some(mut bet) => {
                 if let Ok(spent) =
                     share_price(request.amount, &request.which, bet.yes_pool, bet.no_pool)
@@ -180,8 +182,8 @@ async fn place_bet(
                                 StatusCode::BAD_REQUEST.into_response()
                             } else {
                                 let is_yes = request.which.is_yes();
-                                let mut user_bet = UserBet::get(
-                                    &app_state.pool,
+                                let mut user_bet = UserBet::get_for_update(
+                                    &mut tx,
                                     &user_id,
                                     &request.bet_id,
                                     is_yes,
@@ -210,10 +212,10 @@ async fn place_bet(
                                 bet.no_pool += spent;
 
                                 // All of the DB updates here
-                                User::add_money(&app_state.pool, &user_id, -spent).await;
-                                user_bet.update_or_insert(&app_state.pool).await;
+                                User::add_money(&mut tx, &user_id, -spent).await;
+                                user_bet.update_or_insert(&mut tx).await;
                                 Bet::update_pools(
-                                    &app_state.pool,
+                                    &mut tx,
                                     &request.bet_id,
                                     bet.yes_pool,
                                     bet.no_pool,
@@ -228,6 +230,8 @@ async fn place_bet(
                                     ),
                                 )
                                 .await;
+
+                                tx.commit().await.unwrap();
 
                                 Redirect::to("/").into_response()
                             }
@@ -266,9 +270,11 @@ async fn create_bet(
     State(app_state): State<AppState>,
     Form(request): Form<CreateBetRequest>,
 ) -> Response {
+    let mut tx = app_state.pool.begin().await.unwrap();
+
     let bet_id = Uuid::new_v4().to_string();
 
-    let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
+    let user = User::get_for_update_by_id(&mut tx, &user_id).await.unwrap();
 
     if request.starting_money < 20 {
         (
@@ -277,7 +283,7 @@ async fn create_bet(
         )
             .into_response()
     } else if user.money >= request.starting_money as f64 {
-        User::add_money(&app_state.pool, &user_id, -(request.starting_money as f64)).await;
+        User::add_money(&mut tx, &user_id, -(request.starting_money as f64)).await;
 
         let now = SystemTime::now();
         let duration = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
@@ -292,7 +298,7 @@ async fn create_bet(
             yes_pool: request.starting_money as f64,
             no_pool: request.starting_money as f64,
         }
-        .insert(&app_state.pool)
+        .insert(&mut tx)
         .await;
 
         // When a user starts a bet, they use the money to buy equal amounts of yes shares and no shares
@@ -305,7 +311,7 @@ async fn create_bet(
             amount: 0,
             spent: request.starting_money as f64 / 2.0,
         }
-        .insert(&app_state.pool)
+        .insert(&mut tx)
         .await;
         UserBet {
             user_id: user_id.clone(),
@@ -314,7 +320,7 @@ async fn create_bet(
             amount: 0,
             spent: request.starting_money as f64 / 2.0,
         }
-        .insert(&app_state.pool)
+        .insert(&mut tx)
         .await;
 
         LogMessage::insert(
@@ -325,6 +331,8 @@ async fn create_bet(
             ),
         )
         .await;
+
+        tx.commit().await.unwrap();
 
         Redirect::to("/").into_response()
     } else {
@@ -345,20 +353,24 @@ async fn close_bet(
     State(app_state): State<AppState>,
     Form(request): Form<CloseBetRequest>,
 ) -> Response {
-    let bet = Bet::get_by_id(&app_state.pool, &request.bet_id).await;
+    let mut tx = app_state.pool.begin().await.unwrap();
+
+    let bet = Bet::get_for_update_by_id(&mut tx, &request.bet_id).await;
 
     match bet {
         Some(bet) => {
             if bet.creator_id == user_id {
-                let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
+                let user = User::get_for_update_by_id(&mut tx, &user_id).await.unwrap();
 
-                Bet::close(&app_state.pool, &bet.id).await;
+                Bet::close(&mut tx, &bet.id).await;
 
                 LogMessage::insert(
                     &app_state.pool,
                     &format!("{} closed the market \"{}\"", user.name, bet.name),
                 )
                 .await;
+
+                tx.commit().await.unwrap();
 
                 Redirect::to("/").into_response()
             } else {
@@ -379,48 +391,37 @@ async fn resolve_bet(
     State(app_state): State<AppState>,
     Form(request): Form<ResolveBetRequest>,
 ) -> Response {
-    let bet = Bet::get_by_id(&app_state.pool, &request.bet_id).await;
+    let mut tx = app_state.pool.begin().await.unwrap();
+
+    let bet = Bet::get_for_update_by_id(&mut tx, &request.bet_id).await;
 
     match bet {
         Some(bet) => {
             if bet.creator_id == user_id {
-                let user = User::get_by_id(&app_state.pool, &user_id).await.unwrap();
-                let user_bets = UserBet::get_by_bet_id(&app_state.pool, &request.bet_id).await;
+                let user = User::get_for_update_by_id(&mut tx, &user_id).await.unwrap();
+                let user_bets = UserBet::get_for_update_by_bet_id(&mut tx, &request.bet_id).await;
 
-                Bet::delete(&app_state.pool, &request.bet_id).await;
+                Bet::delete(&mut tx, &request.bet_id).await;
 
                 match request.which {
                     YesOrNoOrNA::Yes => {
-                        User::add_money(&app_state.pool, &bet.creator_id, bet.yes_pool).await;
-                        join_all(user_bets.iter().filter(|user_bet| user_bet.is_yes).map(
-                            |user_bet| {
-                                User::add_money(
-                                    &app_state.pool,
-                                    &user_bet.user_id,
-                                    user_bet.amount as f64,
-                                )
-                            },
-                        ))
-                        .await;
+                        User::add_money(&mut tx, &bet.creator_id, bet.yes_pool).await;
+                        for user_bet in user_bets.iter().filter(|user_bet| user_bet.is_yes) {
+                            User::add_money(&mut tx, &user_bet.user_id, user_bet.amount as f64)
+                                .await;
+                        }
                     }
                     YesOrNoOrNA::No => {
-                        User::add_money(&app_state.pool, &bet.creator_id, bet.no_pool).await;
-                        join_all(user_bets.iter().filter(|user_bet| !user_bet.is_yes).map(
-                            |user_bet| {
-                                User::add_money(
-                                    &app_state.pool,
-                                    &user_bet.user_id,
-                                    user_bet.amount as f64,
-                                )
-                            },
-                        ))
-                        .await;
+                        User::add_money(&mut tx, &bet.creator_id, bet.no_pool).await;
+                        for user_bet in user_bets.iter().filter(|user_bet| !user_bet.is_yes) {
+                            User::add_money(&mut tx, &user_bet.user_id, user_bet.amount as f64)
+                                .await;
+                        }
                     }
                     YesOrNoOrNA::NA => {
-                        join_all(user_bets.iter().map(|user_bet| {
-                            User::add_money(&app_state.pool, &user_bet.user_id, user_bet.spent)
-                        }))
-                        .await;
+                        for user_bet in user_bets.iter() {
+                            User::add_money(&mut tx, &user_bet.user_id, user_bet.spent).await;
+                        }
                     }
                 }
 
@@ -433,6 +434,8 @@ async fn resolve_bet(
                 )
                 .await;
 
+                tx.commit().await.unwrap();
+
                 Redirect::to("/").into_response()
             } else {
                 StatusCode::NOT_FOUND.into_response()
@@ -443,7 +446,9 @@ async fn resolve_bet(
 }
 
 async fn give_money(ExtractUserId(user_id): ExtractUserId, State(app_state): State<AppState>) {
-    let users = User::list(&app_state.pool).await;
+    let mut tx = app_state.pool.begin().await.unwrap();
+
+    let users = User::list_for_update(&mut tx).await;
     if user_id
         == users
             .iter()
@@ -452,8 +457,10 @@ async fn give_money(ExtractUserId(user_id): ExtractUserId, State(app_state): Sta
             .id
     {
         for user in users {
-            User::add_money(&app_state.pool, &user.id, 100.0).await
+            User::add_money(&mut tx, &user.id, 100.0).await
         }
+
+        tx.commit().await.unwrap();
 
         LogMessage::insert(
             &app_state.pool,

@@ -665,7 +665,6 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "envconfig",
- "futures",
  "http 1.2.0",
  "jsonwebtoken",
  "lambda_http 0.11.4",

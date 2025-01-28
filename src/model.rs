@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{FromRow, Pool, Postgres};
+use sqlx::{FromRow, Pool, Postgres, Transaction};
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum YesOrNo {
@@ -55,6 +55,12 @@ impl User {
             .await
             .unwrap()
     }
+    pub async fn list_for_update(transaction: &mut Transaction<'_, Postgres>) -> Vec<Self> {
+        sqlx::query_as("SELECT * FROM betting.users FOR UPDATE")
+            .fetch_all(&mut **transaction)
+            .await
+            .unwrap()
+    }
     pub async fn get_by_id(pool: &Pool<Postgres>, id: &str) -> Option<Self> {
         sqlx::query_as("SELECT * FROM betting.users WHERE id = $1")
             .bind(id)
@@ -62,11 +68,21 @@ impl User {
             .await
             .unwrap()
     }
-    pub async fn add_money(pool: &Pool<Postgres>, id: &str, new_money: f64) {
+    pub async fn get_for_update_by_id(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: &str,
+    ) -> Option<Self> {
+        sqlx::query_as("SELECT * FROM betting.users WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .unwrap()
+    }
+    pub async fn add_money(transaction: &mut Transaction<'_, Postgres>, id: &str, new_money: f64) {
         sqlx::query("UPDATE betting.users SET money = money + $1 WHERE id = $2")
             .bind(new_money)
             .bind(id)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
@@ -88,49 +104,52 @@ impl UserBet {
             .await
             .unwrap()
     }
-    pub async fn get(
-        pool: &Pool<Postgres>,
+    pub async fn get_for_update(
+        transaction: &mut Transaction<'_, Postgres>,
         user_id: &str,
         bet_id: &str,
         is_yes: bool,
     ) -> Option<Self> {
         sqlx::query_as(
-            "SELECT * FROM betting.user_bets WHERE user_id = $1 AND bet_id = $2 AND is_yes = $3",
+            "SELECT * FROM betting.user_bets WHERE user_id = $1 AND bet_id = $2 AND is_yes = $3 FOR UPDATE",
         )
         .bind(user_id)
         .bind(bet_id)
         .bind(is_yes)
-        .fetch_optional(pool)
+        .fetch_optional(&mut **transaction)
         .await
         .unwrap()
     }
-    pub async fn insert(self, pool: &Pool<Postgres>) {
+    pub async fn insert(self, transaction: &mut Transaction<'_, Postgres>) {
         sqlx::query("INSERT INTO betting.user_bets (user_id, bet_id, is_yes, amount, spent) VALUES ($1, $2, $3, $4, $5)")
             .bind(self.user_id)
             .bind(self.bet_id)
             .bind(self.is_yes)
             .bind(self.amount as i64)
             .bind(self.spent)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
-    pub async fn update_or_insert(self, pool: &Pool<Postgres>) {
+    pub async fn update_or_insert(self, transaction: &mut Transaction<'_, Postgres>) {
         sqlx::query("INSERT INTO betting.user_bets (user_id, bet_id, is_yes, amount, spent) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, bet_id, is_yes) DO UPDATE SET amount = $4, spent = $5")
             .bind(self.user_id)
             .bind(self.bet_id)
             .bind(self.is_yes)
             .bind(self.amount as i64)
             .bind(self.spent)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
 
-    pub async fn get_by_bet_id(pool: &Pool<Postgres>, bet_id: &str) -> Vec<UserBet> {
+    pub async fn get_for_update_by_bet_id(
+        transaction: &mut Transaction<'_, Postgres>,
+        bet_id: &str,
+    ) -> Vec<UserBet> {
         sqlx::query_as("SELECT * FROM betting.user_bets WHERE bet_id = $1")
             .bind(bet_id)
-            .fetch_all(pool)
+            .fetch_all(&mut **transaction)
             .await
             .unwrap()
     }
@@ -154,14 +173,17 @@ impl Bet {
             .await
             .unwrap()
     }
-    pub async fn get_by_id(pool: &Pool<Postgres>, id: &str) -> Option<Self> {
-        sqlx::query_as("SELECT * FROM betting.bets WHERE id = $1")
+    pub async fn get_for_update_by_id(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: &str,
+    ) -> Option<Self> {
+        sqlx::query_as("SELECT * FROM betting.bets WHERE id = $1 FOR UPDATE")
             .bind(id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **transaction)
             .await
             .unwrap()
     }
-    pub async fn insert(self, pool: &Pool<Postgres>) {
+    pub async fn insert(self, transaction: &mut Transaction<'_, Postgres>) {
         sqlx::query("INSERT INTO betting.bets (id, creator_id, created_seconds_since_epoch, name, closed, yes_pool, no_pool) VALUES ($1, $2, $3, $4, $5, $6, $7)")
             .bind(self.id)
             .bind(self.creator_id)
@@ -170,30 +192,35 @@ impl Bet {
             .bind(self.closed)
             .bind(self.yes_pool)
             .bind(self.no_pool)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
-    pub async fn delete(pool: &Pool<Postgres>, id: &str) {
+    pub async fn delete(transaction: &mut Transaction<'_, Postgres>, id: &str) {
         sqlx::query("DELETE FROM betting.bets WHERE id = $1")
             .bind(id)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
-    pub async fn close(pool: &Pool<Postgres>, id: &str) {
+    pub async fn close(transaction: &mut Transaction<'_, Postgres>, id: &str) {
         sqlx::query("UPDATE betting.bets SET closed = true WHERE id = $1")
             .bind(id)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
-    pub async fn update_pools(pool: &Pool<Postgres>, id: &str, yes_pool: f64, no_pool: f64) {
+    pub async fn update_pools(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: &str,
+        yes_pool: f64,
+        no_pool: f64,
+    ) {
         sqlx::query("UPDATE betting.bets SET yes_pool = $1, no_pool = $2 WHERE id = $3")
             .bind(yes_pool)
             .bind(no_pool)
             .bind(id)
-            .execute(pool)
+            .execute(&mut **transaction)
             .await
             .unwrap();
     }
